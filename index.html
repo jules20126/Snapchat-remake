@@ -1,0 +1,557 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>Glimpse</title>
+
+  <!-- PWA -->
+  <link rel="manifest" href="manifest.json" />
+  <meta name="theme-color" content="#0a0a0f" />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="apple-mobile-web-app-title" content="Glimpse" />
+
+  <!-- Social / SEO -->
+  <meta name="description" content="Share moments. Just with your people." />
+  <meta property="og:title" content="Glimpse" />
+  <meta property="og:description" content="Share moments. Just with your people." />
+
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    html, body, #root { height: 100%; }
+    body {
+      background: #0a0a0f;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      -webkit-font-smoothing: antialiased;
+      overscroll-behavior: none;
+    }
+    input, button, textarea { font-family: inherit; }
+    /* Hide scrollbars but keep scroll */
+    ::-webkit-scrollbar { display: none; }
+    * { -ms-overflow-style: none; scrollbar-width: none; }
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+
+  <!-- React + Babel -->
+  <script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+
+  <script type="text/babel">
+    const { useState, useRef, useEffect } = React;
+
+    const GRADIENT = "linear-gradient(135deg, #FF6B6B 0%, #FF8E53 50%, #FFA07A 100%)";
+
+    // ── In a real app, USERS would come from a backend API ──
+    // ── For demo purposes only — remove these in production ──
+    const DEMO_USERS = {
+      jess:   { id: "jess",   username: "jess_v",  name: "Jess",   emoji: "🧡", bg: "linear-gradient(135deg,#f093fb,#f5576c)" },
+      marcus: { id: "marcus", username: "marc_r",  name: "Marcus", emoji: "💙", bg: "linear-gradient(135deg,#4facfe,#00f2fe)" },
+      priya:  { id: "priya",  username: "priya_k", name: "Priya",  emoji: "💚", bg: "linear-gradient(135deg,#43e97b,#38f9d7)" },
+      tom:    { id: "tom",    username: "tom_d",   name: "Tom",    emoji: "💜", bg: "linear-gradient(135deg,#a18cd1,#fbc2eb)" },
+      zoe:    { id: "zoe",    username: "zoe_m",   name: "Zoe",    emoji: "🧡", bg: "linear-gradient(135deg,#fda085,#f6d365)" },
+    };
+
+    const REPLIES = ["haha yes!!", "omg same 😭", "no way", "🔥🔥", "fr fr", "okay but wait", "that's so funny", "love that for you", "vibes ✨", "lmaoo", "wait really??"];
+
+    function Avatar({ user, size = 48, myInitial = null, myBg = null }) {
+      return (
+        <div style={{
+          width: size, height: size, borderRadius: "50%",
+          background: myBg || user?.bg || "linear-gradient(135deg,#667eea,#764ba2)",
+          display: "flex", alignItems: "center", justifyContent: "center",
+          fontSize: size * 0.45, flexShrink: 0, boxShadow: "0 2px 8px rgba(0,0,0,0.25)"
+        }}>
+          {myInitial || user?.emoji}
+        </div>
+      );
+    }
+
+    function fmtTime(ts) {
+      const d = Date.now() - ts;
+      if (d < 60000) return "now";
+      if (d < 3600000) return `${Math.floor(d / 60000)}m`;
+      if (d < 86400000) return `${Math.floor(d / 3600000)}h`;
+      return `${Math.floor(d / 86400000)}d`;
+    }
+
+    // Persist session to localStorage
+    function loadState(key, fallback) {
+      try { const v = localStorage.getItem(key); return v ? JSON.parse(v) : fallback; } catch { return fallback; }
+    }
+    function saveState(key, val) {
+      try { localStorage.setItem(key, JSON.stringify(val)); } catch {}
+    }
+
+    function App() {
+      const [me, setMe] = useState(() => loadState("glimpse_me", null));
+      const [nameInput, setNameInput] = useState("");
+      const [userInput, setUserInput] = useState("");
+      const [tab, setTab] = useState("stories");
+      const [screen, setScreen] = useState("main");
+      const [friends, setFriends] = useState(() => loadState("glimpse_friends", []));
+      const [stories, setStories] = useState(() => loadState("glimpse_stories", {}));
+      const [myStories, setMyStories] = useState(() => loadState("glimpse_mystories", []));
+      const [messages, setMessages] = useState(() => loadState("glimpse_messages", {}));
+      const [activeUser, setActiveUser] = useState(null);
+      const [storyIdx, setStoryIdx] = useState(0);
+      const [msgText, setMsgText] = useState("");
+      const [searchQ, setSearchQ] = useState("");
+      const [capturedPhoto, setCapturedPhoto] = useState(null);
+      const [facingMode, setFacingMode] = useState("user");
+      const [flash, setFlash] = useState(false);
+      const [showStoryPicker, setShowStoryPicker] = useState(false);
+      const fileRef = useRef();
+      const chatRef = useRef();
+      const videoRef = useRef();
+      const canvasRef = useRef();
+      const streamRef = useRef();
+      const cameraInputRef = useRef();
+
+      // Persist to localStorage whenever state changes
+      useEffect(() => { if (me) saveState("glimpse_me", me); }, [me]);
+      useEffect(() => { saveState("glimpse_friends", friends); }, [friends]);
+      useEffect(() => { saveState("glimpse_stories", stories); }, [stories]);
+      useEffect(() => { saveState("glimpse_mystories", myStories); }, [myStories]);
+      useEffect(() => { saveState("glimpse_messages", messages); }, [messages]);
+
+      useEffect(() => {
+        if (chatRef.current) chatRef.current.scrollTop = chatRef.current.scrollHeight;
+      }, [messages, activeUser]);
+
+      useEffect(() => {
+        if (screen === "camera" && !capturedPhoto) startCamera();
+        if (screen !== "camera") stopCamera();
+      }, [screen, capturedPhoto, facingMode]);
+
+      async function startCamera() {
+        stopCamera();
+        try {
+          const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode }, audio: false });
+          streamRef.current = stream;
+          if (videoRef.current) { videoRef.current.srcObject = stream; videoRef.current.play(); }
+        } catch { alert("Allow camera access to take photos."); setScreen("main"); }
+      }
+
+      function stopCamera() {
+        if (streamRef.current) { streamRef.current.getTracks().forEach(t => t.stop()); streamRef.current = null; }
+      }
+
+      function capturePhoto() {
+        const video = videoRef.current, canvas = canvasRef.current;
+        if (!video || !canvas) return;
+        canvas.width = video.videoWidth || 640;
+        canvas.height = video.videoHeight || 480;
+        const ctx = canvas.getContext("2d");
+        if (facingMode === "user") { ctx.translate(canvas.width, 0); ctx.scale(-1, 1); }
+        ctx.drawImage(video, 0, 0);
+        setCapturedPhoto(canvas.toDataURL("image/jpeg", 0.92));
+        setFlash(true);
+        setTimeout(() => setFlash(false), 200);
+        stopCamera();
+      }
+
+      function saveStory() {
+        if (!capturedPhoto) return;
+        setMyStories(p => [...p, { id: Date.now(), src: capturedPhoto, type: "image" }]);
+        setCapturedPhoto(null);
+        setScreen("main");
+      }
+
+      function login() {
+        if (nameInput.trim().length < 2 || userInput.trim().length < 2) return;
+        const user = { name: nameInput.trim(), username: userInput.trim().toLowerCase().replace(/\s/g, "_") };
+        setMe(user);
+        saveState("glimpse_me", user);
+      }
+
+      function uploadStory(e) {
+        const file = e.target.files[0];
+        if (!file) return;
+        const reader = new FileReader();
+        reader.onload = ev => setMyStories(p => [...p, { id: Date.now(), src: ev.target.result, type: file.type.startsWith("video") ? "video" : "image" }]);
+        reader.readAsDataURL(file);
+        e.target.value = "";
+      }
+
+      function sendMsg() {
+        if (!msgText.trim() || !activeUser) return;
+        setMessages(p => ({ ...p, [activeUser]: [...(p[activeUser] || []), { id: Date.now(), from: "me", text: msgText.trim(), ts: Date.now() }] }));
+        setMsgText("");
+        setTimeout(() => {
+          setMessages(p => ({ ...p, [activeUser]: [...(p[activeUser] || []), { id: Date.now() + 1, from: activeUser, text: REPLIES[Math.floor(Math.random() * REPLIES.length)], ts: Date.now() }] }));
+        }, 1200 + Math.random() * 800);
+      }
+
+      function addFriend(uid) { setFriends(p => [...p, uid]); setMessages(p => ({ ...p, [uid]: p[uid] || [] })); }
+
+      const myInitial = me?.name?.[0]?.toUpperCase();
+      const myBg = "linear-gradient(135deg,#FF6B6B,#FF8E53)";
+
+      // ── AUTH ───────────────────────────────────────
+      if (!me) return (
+        <div style={{ minHeight: "100vh", background: "#0a0a0f", display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }}>
+          <div style={{ width: "100%", maxWidth: 380 }}>
+            <div style={{ textAlign: "center", marginBottom: 40 }}>
+              <div style={{ fontSize: 56, marginBottom: 12 }}>👁️</div>
+              <h1 style={{ color: "white", fontSize: 36, fontWeight: 900, margin: 0, letterSpacing: "-1px" }}>glimpse</h1>
+              <p style={{ color: "#666", marginTop: 8, fontSize: 15 }}>share moments. just with your people.</p>
+            </div>
+            <div style={{ background: "#111118", borderRadius: 24, padding: 28, border: "1px solid #222" }}>
+              <input value={nameInput} onChange={e => setNameInput(e.target.value)} placeholder="Your name"
+                style={{ width: "100%", padding: "14px 16px", borderRadius: 12, background: "#1a1a24", border: "1px solid #2a2a38", color: "white", fontSize: 16, marginBottom: 12, outline: "none" }} />
+              <input value={userInput} onChange={e => setUserInput(e.target.value.toLowerCase().replace(/[^a-z0-9_]/g, ""))}
+                onKeyDown={e => e.key === "Enter" && login()} placeholder="Pick a username"
+                style={{ width: "100%", padding: "14px 16px", borderRadius: 12, background: "#1a1a24", border: "1px solid #2a2a38", color: "white", fontSize: 16, marginBottom: 20, outline: "none" }} />
+              <button onClick={login} style={{ width: "100%", padding: 16, borderRadius: 12, background: GRADIENT, color: "white", fontWeight: 800, fontSize: 16, border: "none", cursor: "pointer" }}>
+                Enter Glimpse →
+              </button>
+            </div>
+          </div>
+        </div>
+      );
+
+      // ── CAMERA ─────────────────────────────────────
+      if (screen === "camera") return (
+        <div style={{ minHeight: "100vh", background: "#000", display: "flex", flexDirection: "column", position: "relative", overflow: "hidden" }}>
+          {flash && <div style={{ position: "absolute", inset: 0, background: "white", zIndex: 50 }} />}
+          {capturedPhoto ? (
+            <>
+              <img src={capturedPhoto} alt="preview" style={{ width: "100%", height: "100vh", objectFit: "cover", transform: facingMode === "user" ? "scaleX(-1)" : "none" }} />
+              <div style={{ position: "absolute", bottom: 0, left: 0, right: 0, padding: "24px 32px 52px", display: "flex", justifyContent: "space-between", alignItems: "center", background: "linear-gradient(transparent,rgba(0,0,0,0.7))" }}>
+                <button onClick={() => setCapturedPhoto(null)} style={{ padding: "12px 24px", borderRadius: 24, background: "rgba(255,255,255,0.2)", border: "2px solid rgba(255,255,255,0.5)", color: "white", fontWeight: 700, fontSize: 15, cursor: "pointer" }}>↩ Retake</button>
+                <button onClick={saveStory} style={{ padding: "14px 32px", borderRadius: 24, background: GRADIENT, border: "none", color: "white", fontWeight: 800, fontSize: 16, cursor: "pointer" }}>Post Story ✓</button>
+              </div>
+              <button onClick={() => { setCapturedPhoto(null); setScreen("main"); }} style={{ position: "absolute", top: 52, left: 16, background: "rgba(0,0,0,0.5)", border: "none", borderRadius: "50%", width: 40, height: 40, color: "white", fontSize: 18, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center" }}>✕</button>
+            </>
+          ) : (
+            <>
+              <video ref={videoRef} autoPlay playsInline muted style={{ width: "100%", height: "100vh", objectFit: "cover", transform: facingMode === "user" ? "scaleX(-1)" : "none" }} />
+              <canvas ref={canvasRef} style={{ display: "none" }} />
+              <div style={{ position: "absolute", top: 52, left: 0, right: 0, display: "flex", justifyContent: "space-between", padding: "0 20px", zIndex: 10 }}>
+                <button onClick={() => { stopCamera(); setScreen("main"); }} style={{ background: "rgba(0,0,0,0.4)", border: "none", borderRadius: "50%", width: 42, height: 42, color: "white", fontSize: 20, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center" }}>✕</button>
+                <button onClick={() => { setFacingMode(f => f === "user" ? "environment" : "user"); setCapturedPhoto(null); }} style={{ background: "rgba(0,0,0,0.4)", border: "none", borderRadius: "50%", width: 42, height: 42, color: "white", fontSize: 20, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center" }}>🔄</button>
+              </div>
+              <div style={{ position: "absolute", bottom: 0, left: 0, right: 0, paddingBottom: 56, display: "flex", justifyContent: "center", background: "linear-gradient(transparent,rgba(0,0,0,0.5))" }}>
+                <button onClick={capturePhoto} style={{ width: 80, height: 80, borderRadius: "50%", background: "white", border: "5px solid rgba(255,255,255,0.4)", cursor: "pointer", boxShadow: "0 0 0 3px rgba(255,255,255,0.2)", display: "flex", alignItems: "center", justifyContent: "center" }}>
+                  <div style={{ width: 60, height: 60, borderRadius: "50%", background: "white", border: "2px solid #ddd" }} />
+                </button>
+              </div>
+            </>
+          )}
+        </div>
+      );
+
+      // ── STORY VIEWER ───────────────────────────────
+      if (screen === "storyview" && activeUser) {
+        const isMe = activeUser === "me";
+        const list = isMe ? myStories : (stories[activeUser] || []);
+        const story = list[storyIdx];
+        if (!story) { setScreen("main"); return null; }
+        return (
+          <div style={{ minHeight: "100vh", background: "#000", display: "flex", flexDirection: "column", position: "relative" }}
+            onClick={() => { if (storyIdx < list.length - 1) setStoryIdx(i => i + 1); else { setScreen("main"); setStoryIdx(0); } }}>
+            <div style={{ position: "absolute", top: 0, left: 0, right: 0, zIndex: 10, display: "flex", gap: 4, padding: "52px 14px 8px" }}>
+              {list.map((_, i) => <div key={i} style={{ flex: 1, height: 3, borderRadius: 2, background: i <= storyIdx ? "white" : "rgba(255,255,255,0.3)" }} />)}
+            </div>
+            <button onClick={e => { e.stopPropagation(); setScreen("main"); setStoryIdx(0); }} style={{ position: "absolute", top: 62, right: 16, zIndex: 20, background: "rgba(0,0,0,0.4)", border: "none", borderRadius: "50%", width: 36, height: 36, color: "white", cursor: "pointer", fontSize: 18, display: "flex", alignItems: "center", justifyContent: "center" }}>✕</button>
+            <div style={{ position: "absolute", top: 60, left: 16, zIndex: 10, display: "flex", alignItems: "center", gap: 10 }}>
+              <Avatar user={isMe ? null : DEMO_USERS[activeUser]} size={36} myInitial={isMe ? myInitial : null} myBg={isMe ? myBg : null} />
+              <span style={{ color: "white", fontWeight: 700, fontSize: 15, textShadow: "0 1px 4px rgba(0,0,0,0.5)" }}>{isMe ? me.name : DEMO_USERS[activeUser]?.name}</span>
+            </div>
+            <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center" }}>
+              {story.src ? (
+                story.type === "video"
+                  ? <video src={story.src} style={{ maxWidth: "100%", maxHeight: "100vh", objectFit: "contain" }} autoPlay muted loop />
+                  : <img src={story.src} style={{ maxWidth: "100%", maxHeight: "100vh", objectFit: "contain" }} alt="story" />
+              ) : (
+                <div style={{ width: "100%", height: "100vh", background: story.bg, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center" }}>
+                  <div style={{ fontSize: 90 }}>{story.emoji}</div>
+                  <div style={{ color: "white", fontSize: 26, fontWeight: 800, marginTop: 20, textShadow: "0 2px 8px rgba(0,0,0,0.4)", padding: "0 36px", textAlign: "center" }}>{story.caption}</div>
+                </div>
+              )}
+            </div>
+          </div>
+        );
+      }
+
+      // ── CHAT ───────────────────────────────────────
+      if (screen === "chat" && activeUser) {
+        const u = DEMO_USERS[activeUser];
+        const chat = messages[activeUser] || [];
+        return (
+          <div style={{ minHeight: "100vh", background: "#0a0a0f", display: "flex", flexDirection: "column" }}>
+            <div style={{ background: "#111118", padding: "52px 16px 16px", display: "flex", alignItems: "center", gap: 12, borderBottom: "1px solid #1e1e2a" }}>
+              <button onClick={() => setScreen("main")} style={{ background: "none", border: "none", color: "#888", cursor: "pointer", fontSize: 22, display: "flex", alignItems: "center" }}>←</button>
+              <Avatar user={u} size={42} />
+              <div>
+                <div style={{ color: "white", fontWeight: 700, fontSize: 16 }}>{u?.name}</div>
+                <div style={{ color: "#555", fontSize: 12 }}>@{u?.username}</div>
+              </div>
+            </div>
+            <div ref={chatRef} style={{ flex: 1, overflowY: "auto", padding: "20px 16px", display: "flex", flexDirection: "column", gap: 10 }}>
+              {chat.length === 0 && <div style={{ textAlign: "center", color: "#444", marginTop: 60, fontSize: 14 }}>Say hi! 👋</div>}
+              {chat.map(msg => (
+                <div key={msg.id} style={{ display: "flex", justifyContent: msg.from === "me" ? "flex-end" : "flex-start", gap: 8, alignItems: "flex-end" }}>
+                  {msg.from !== "me" && <Avatar user={u} size={28} />}
+                  <div style={{ maxWidth: "72%", padding: "11px 15px", borderRadius: msg.from === "me" ? "18px 18px 4px 18px" : "18px 18px 18px 4px", background: msg.from === "me" ? GRADIENT : "#1a1a24", color: "white", fontSize: 15, lineHeight: 1.4 }}>
+                    {msg.text}
+                    <div style={{ fontSize: 10, opacity: 0.5, marginTop: 4, textAlign: "right" }}>{fmtTime(msg.ts)}</div>
+                  </div>
+                </div>
+              ))}
+            </div>
+            <div style={{ background: "#111118", padding: "12px 16px 36px", display: "flex", gap: 10, alignItems: "center", borderTop: "1px solid #1e1e2a" }}>
+              <input value={msgText} onChange={e => setMsgText(e.target.value)} onKeyDown={e => e.key === "Enter" && sendMsg()}
+                placeholder={`Message ${u?.name}...`}
+                style={{ flex: 1, padding: "13px 16px", borderRadius: 24, background: "#1a1a24", border: "1px solid #2a2a38", color: "white", fontSize: 15, outline: "none" }} />
+              <button onClick={sendMsg} style={{ width: 46, height: 46, borderRadius: "50%", background: GRADIENT, border: "none", cursor: "pointer", fontSize: 18, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>↑</button>
+            </div>
+          </div>
+        );
+      }
+
+      // ── ADD FRIEND ─────────────────────────────────
+      if (screen === "addfriend") {
+        const results = Object.values(DEMO_USERS).filter(u =>
+          !friends.includes(u.id) &&
+          (searchQ === "" || u.username.includes(searchQ.toLowerCase()) || u.name.toLowerCase().includes(searchQ.toLowerCase()))
+        );
+        return (
+          <div style={{ minHeight: "100vh", background: "#0a0a0f" }}>
+            <div style={{ background: "#111118", padding: "52px 16px 16px", display: "flex", alignItems: "center", gap: 12, borderBottom: "1px solid #1e1e2a" }}>
+              <button onClick={() => setScreen("main")} style={{ background: "none", border: "none", color: "#888", cursor: "pointer", fontSize: 22, display: "flex", alignItems: "center" }}>←</button>
+              <h2 style={{ color: "white", margin: 0, fontSize: 20, fontWeight: 800 }}>Find Friends</h2>
+            </div>
+            <div style={{ padding: 16 }}>
+              <input value={searchQ} onChange={e => setSearchQ(e.target.value)} placeholder="Search by name or username..."
+                style={{ width: "100%", padding: "13px 16px", borderRadius: 12, background: "#111118", border: "1px solid #2a2a38", color: "white", fontSize: 15, outline: "none", marginBottom: 16 }} />
+              {results.map(u => (
+                <div key={u.id} style={{ background: "#111118", borderRadius: 16, padding: "14px 16px", marginBottom: 10, display: "flex", alignItems: "center", gap: 12, border: "1px solid #1e1e2a" }}>
+                  <Avatar user={u} size={50} />
+                  <div style={{ flex: 1 }}>
+                    <div style={{ color: "white", fontWeight: 700, fontSize: 16 }}>{u.name}</div>
+                    <div style={{ color: "#555", fontSize: 13 }}>@{u.username}</div>
+                  </div>
+                  <button onClick={() => addFriend(u.id)} style={{ padding: "9px 18px", borderRadius: 20, background: GRADIENT, color: "white", fontWeight: 700, fontSize: 14, border: "none", cursor: "pointer" }}>+ Add</button>
+                </div>
+              ))}
+              {results.length === 0 && <div style={{ textAlign: "center", color: "#444", padding: 48 }}>{searchQ ? "No one found" : "You're all caught up! 🎉"}</div>}
+            </div>
+          </div>
+        );
+      }
+
+      // ── MAIN ───────────────────────────────────────
+      const friendsWithStories = friends.filter(f => stories[f]?.length > 0);
+      const friendsNoStories = friends.filter(f => !stories[f]?.length);
+
+      return (
+        <div style={{ minHeight: "100vh", background: "#0a0a0f", maxWidth: 480, margin: "0 auto", display: "flex", flexDirection: "column" }}>
+          <div style={{ flex: 1, overflowY: "auto", paddingBottom: 80 }}>
+
+            {/* STORIES TAB */}
+            {tab === "stories" && (
+              <div>
+                <div style={{ background: "#111118", padding: "52px 20px 20px", borderBottom: "1px solid #1e1e2a" }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 24 }}>
+                    <h1 style={{ color: "white", margin: 0, fontSize: 28, fontWeight: 900, letterSpacing: "-0.5px" }}>glimpse</h1>
+                    <button onClick={() => setScreen("addfriend")} style={{ background: "#1a1a24", border: "1px solid #2a2a38", borderRadius: 20, padding: "8px 16px", color: "#FF8E53", fontWeight: 700, fontSize: 14, cursor: "pointer" }}>+ Add</button>
+                  </div>
+                  <div style={{ display: "flex", gap: 18, overflowX: "auto", paddingBottom: 4 }}>
+                    <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 6, cursor: "pointer", flexShrink: 0 }}
+                      onClick={() => myStories.length > 0 ? (setActiveUser("me"), setStoryIdx(0), setScreen("storyview")) : setShowStoryPicker(true)}>
+                      <div style={{ position: "relative" }}>
+                        <div style={{ width: 66, height: 66, borderRadius: "50%", background: myBg, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 26, color: "white", fontWeight: 800, border: myStories.length > 0 ? "3px solid #FF6B6B" : "3px solid #333" }}>{myInitial}</div>
+                        <div style={{ position: "absolute", bottom: 1, right: 1, width: 22, height: 22, borderRadius: "50%", background: GRADIENT, display: "flex", alignItems: "center", justifyContent: "center", border: "2px solid #0a0a0f", fontSize: 14 }}>+</div>
+                      </div>
+                      <span style={{ fontSize: 11, color: "#888", fontWeight: 600 }}>My Story</span>
+                    </div>
+                    {[...friendsWithStories, ...friendsNoStories].map(fId => {
+                      const u = DEMO_USERS[fId];
+                      const has = !!stories[fId]?.length;
+                      return (
+                        <div key={fId} style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 6, cursor: has ? "pointer" : "default", flexShrink: 0 }}
+                          onClick={() => has && (setActiveUser(fId), setStoryIdx(0), setScreen("storyview"))}>
+                          <div style={{ width: 66, height: 66, borderRadius: "50%", background: u?.bg, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 28, border: has ? "3px solid #FF6B6B" : "3px solid #222", opacity: has ? 1 : 0.45 }}>{u?.emoji}</div>
+                          <span style={{ fontSize: 11, color: has ? "#ccc" : "#555", fontWeight: 600 }}>{u?.name}</span>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                {myStories.length > 0 && (
+                  <div style={{ padding: "20px 20px 0" }}>
+                    <div style={{ color: "#888", fontSize: 12, fontWeight: 700, letterSpacing: "1px", textTransform: "uppercase", marginBottom: 12 }}>My Story</div>
+                    <div style={{ display: "flex", gap: 10 }}>
+                      {myStories.map((s, i) => (
+                        <div key={s.id} onClick={() => { setActiveUser("me"); setStoryIdx(i); setScreen("storyview"); }}
+                          style={{ width: 90, height: 130, borderRadius: 14, overflow: "hidden", cursor: "pointer", flexShrink: 0, border: "2px solid #333" }}>
+                          {s.type === "video" ? <video src={s.src} style={{ width: "100%", height: "100%", objectFit: "cover" }} /> : <img src={s.src} style={{ width: "100%", height: "100%", objectFit: "cover" }} alt="story" />}
+                        </div>
+                      ))}
+                      <div onClick={() => setShowStoryPicker(true)} style={{ width: 90, height: 130, borderRadius: 14, border: "2px dashed #333", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", color: "#444", fontSize: 28, flexShrink: 0 }}>+</div>
+                    </div>
+                  </div>
+                )}
+
+                <div style={{ padding: 20 }}>
+                  <div style={{ color: "#888", fontSize: 12, fontWeight: 700, letterSpacing: "1px", textTransform: "uppercase", marginBottom: 12 }}>Friends</div>
+                  {friends.length === 0 ? (
+                    <div style={{ textAlign: "center", padding: "48px 0", color: "#444" }}>
+                      <div style={{ fontSize: 40, marginBottom: 12 }}>👥</div>
+                      <div>Add friends to see their stories</div>
+                    </div>
+                  ) : friends.map(fId => {
+                    const u = DEMO_USERS[fId];
+                    const fStories = stories[fId] || [];
+                    return (
+                      <div key={fId} onClick={() => fStories.length && (setActiveUser(fId), setStoryIdx(0), setScreen("storyview"))}
+                        style={{ background: "#111118", borderRadius: 16, marginBottom: 10, padding: "14px 16px", display: "flex", alignItems: "center", gap: 14, border: "1px solid #1e1e2a", cursor: fStories.length ? "pointer" : "default" }}>
+                        <div style={{ position: "relative" }}>
+                          <Avatar user={u} size={48} />
+                          {fStories.length > 0 && <div style={{ position: "absolute", bottom: 0, right: 0, width: 14, height: 14, borderRadius: "50%", background: "#FF6B6B", border: "2px solid #111118" }} />}
+                        </div>
+                        <div style={{ flex: 1 }}>
+                          <div style={{ color: "white", fontWeight: 700, fontSize: 15 }}>{u?.name}</div>
+                          <div style={{ color: "#555", fontSize: 13 }}>{fStories.length > 0 ? `${fStories.length} active stor${fStories.length > 1 ? "ies" : "y"}` : "no stories yet"}</div>
+                        </div>
+                        {fStories.length > 0 && <div style={{ fontSize: 12, color: "#FF8E53", fontWeight: 700 }}>View</div>}
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+
+            {/* MESSAGES TAB */}
+            {tab === "messages" && (
+              <div>
+                <div style={{ background: "#111118", padding: "52px 20px 20px", borderBottom: "1px solid #1e1e2a" }}>
+                  <h1 style={{ color: "white", margin: 0, fontSize: 28, fontWeight: 900, letterSpacing: "-0.5px" }}>Chats</h1>
+                </div>
+                <div style={{ padding: 20 }}>
+                  {friends.length === 0 ? (
+                    <div style={{ textAlign: "center", padding: "48px 0", color: "#444" }}>
+                      <div style={{ fontSize: 40, marginBottom: 12 }}>💬</div>
+                      <div>Add friends to start chatting</div>
+                    </div>
+                  ) : friends.map(fId => {
+                    const u = DEMO_USERS[fId];
+                    const chat = messages[fId] || [];
+                    const last = chat[chat.length - 1];
+                    return (
+                      <div key={fId} onClick={() => { setActiveUser(fId); setScreen("chat"); }}
+                        style={{ background: "#111118", borderRadius: 16, marginBottom: 10, padding: "14px 16px", display: "flex", alignItems: "center", gap: 14, border: "1px solid #1e1e2a", cursor: "pointer" }}>
+                        <Avatar user={u} size={52} />
+                        <div style={{ flex: 1, minWidth: 0 }}>
+                          <div style={{ color: "white", fontWeight: 700, fontSize: 15 }}>{u?.name}</div>
+                          <div style={{ color: "#555", fontSize: 13, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                            {last ? (last.from === "me" ? `You: ${last.text}` : last.text) : "Say hello! 👋"}
+                          </div>
+                        </div>
+                        {last && <div style={{ fontSize: 11, color: "#444" }}>{fmtTime(last.ts)}</div>}
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+
+            {/* PROFILE TAB */}
+            {tab === "profile" && (
+              <div>
+                <div style={{ background: "#111118", padding: "52px 20px 28px", borderBottom: "1px solid #1e1e2a", textAlign: "center" }}>
+                  <div style={{ width: 84, height: 84, borderRadius: "50%", background: myBg, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 38, color: "white", fontWeight: 800, margin: "0 auto 14px", border: "3px solid #FF6B6B", boxShadow: "0 0 30px rgba(255,107,107,0.3)" }}>{myInitial}</div>
+                  <h2 style={{ color: "white", margin: "0 0 4px", fontSize: 24, fontWeight: 900 }}>{me.name}</h2>
+                  <p style={{ color: "#555", margin: "0 0 20px", fontSize: 14 }}>@{me.username}</p>
+                  <div style={{ display: "flex", justifyContent: "center", gap: 40 }}>
+                    {[["Friends", friends.length], ["Stories", myStories.length]].map(([label, val]) => (
+                      <div key={label} style={{ textAlign: "center" }}>
+                        <div style={{ color: "white", fontSize: 22, fontWeight: 900 }}>{val}</div>
+                        <div style={{ color: "#555", fontSize: 12 }}>{label}</div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+                <div style={{ padding: 20, display: "flex", flexDirection: "column", gap: 12 }}>
+                  <button onClick={() => setShowStoryPicker(true)} style={{ width: "100%", padding: 16, borderRadius: 14, background: GRADIENT, color: "white", fontWeight: 800, fontSize: 16, border: "none", cursor: "pointer" }}>📷 Post a Story</button>
+                  <button onClick={() => setScreen("addfriend")} style={{ width: "100%", padding: 16, borderRadius: 14, background: "#111118", color: "#FF8E53", fontWeight: 800, fontSize: 16, border: "1px solid #2a2a38", cursor: "pointer" }}>+ Find Friends</button>
+                  <button onClick={() => { if (confirm("Sign out of Glimpse?")) { saveState("glimpse_me", null); setMe(null); } }}
+                    style={{ width: "100%", padding: 16, borderRadius: 14, background: "#111118", color: "#666", fontWeight: 700, fontSize: 15, border: "1px solid #1e1e2a", cursor: "pointer" }}>Sign Out</button>
+                  <div style={{ background: "#111118", borderRadius: 14, padding: 20, border: "1px solid #1e1e2a" }}>
+                    <div style={{ color: "#555", fontSize: 12, fontWeight: 700, letterSpacing: "1px", textTransform: "uppercase", marginBottom: 12 }}>Privacy</div>
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                      <span style={{ color: "#ccc", fontSize: 15 }}>Stories visible to</span>
+                      <span style={{ color: "#FF8E53", fontWeight: 700 }}>Friends only 🔒</span>
+                    </div>
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 10 }}>
+                      <span style={{ color: "#ccc", fontSize: 15 }}>Messages</span>
+                      <span style={{ color: "#FF8E53", fontWeight: 700 }}>Private 🔒</span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
+
+          {/* Bottom Nav */}
+          <div style={{ position: "fixed", bottom: 0, left: "50%", transform: "translateX(-50%)", width: "100%", maxWidth: 480, background: "#111118", borderTop: "1px solid #1e1e2a", display: "flex", padding: "12px 0 26px" }}>
+            {[{ id: "stories", icon: "◉", label: "Stories" }, { id: "messages", icon: "◎", label: "Chats" }, { id: "profile", icon: "○", label: "Profile" }].map(t => (
+              <button key={t.id} onClick={() => { setTab(t.id); setScreen("main"); }}
+                style={{ flex: 1, background: "none", border: "none", cursor: "pointer", display: "flex", flexDirection: "column", alignItems: "center", gap: 3 }}>
+                <span style={{ fontSize: 22, color: tab === t.id ? "#FF6B6B" : "#444" }}>{t.icon}</span>
+                <span style={{ fontSize: 10, fontWeight: 700, color: tab === t.id ? "#FF6B6B" : "#444" }}>{t.label}</span>
+              </button>
+            ))}
+          </div>
+
+          {/* Story Picker Sheet */}
+          {showStoryPicker && (
+            <>
+              <div onClick={() => setShowStoryPicker(false)} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.6)", zIndex: 100 }} />
+              <div style={{ position: "fixed", bottom: 0, left: "50%", transform: "translateX(-50%)", width: "100%", maxWidth: 480, background: "#1a1a24", borderRadius: "24px 24px 0 0", zIndex: 101, padding: "12px 20px 48px", border: "1px solid #2a2a38" }}>
+                <div style={{ width: 40, height: 4, borderRadius: 2, background: "#444", margin: "0 auto 24px" }} />
+                <p style={{ color: "#888", fontSize: 13, fontWeight: 700, textAlign: "center", marginBottom: 16, letterSpacing: "0.5px", textTransform: "uppercase" }}>Add to Story</p>
+                <div style={{ display: "flex", gap: 12 }}>
+                  <button onClick={() => { setShowStoryPicker(false); cameraInputRef.current.click(); }}
+                    style={{ flex: 1, padding: "20px 16px", borderRadius: 18, background: "#111118", border: "1px solid #2a2a38", cursor: "pointer", display: "flex", flexDirection: "column", alignItems: "center", gap: 10 }}>
+                    <span style={{ fontSize: 36 }}>📷</span>
+                    <span style={{ color: "white", fontWeight: 700, fontSize: 15 }}>Camera</span>
+                    <span style={{ color: "#555", fontSize: 12 }}>Take a photo</span>
+                  </button>
+                  <button onClick={() => { setShowStoryPicker(false); fileRef.current.click(); }}
+                    style={{ flex: 1, padding: "20px 16px", borderRadius: 18, background: "#111118", border: "1px solid #2a2a38", cursor: "pointer", display: "flex", flexDirection: "column", alignItems: "center", gap: 10 }}>
+                    <span style={{ fontSize: 36 }}>🖼️</span>
+                    <span style={{ color: "white", fontWeight: 700, fontSize: 15 }}>Library</span>
+                    <span style={{ color: "#555", fontSize: 12 }}>Choose a photo</span>
+                  </button>
+                </div>
+              </div>
+            </>
+          )}
+
+          <input type="file" accept="image/*,video/*" ref={fileRef} onChange={uploadStory} style={{ display: "none" }} />
+          <input type="file" accept="image/*" capture="environment" ref={cameraInputRef} onChange={uploadStory} style={{ display: "none" }} />
+        </div>
+      );
+    }
+
+    ReactDOM.createRoot(document.getElementById("root")).render(<App />);
+
+    // Register service worker
+    if ("serviceWorker" in navigator) {
+      window.addEventListener("load", () => {
+        navigator.serviceWorker.register("/sw.js")
+          .then(r => console.log("SW registered:", r.scope))
+          .catch(e => console.log("SW failed:", e));
+      });
+    }
+  </script>
+</body>
+</html>
